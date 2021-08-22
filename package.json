@@ -1,7 +1,7 @@
 {
-	"name": "ts-bot-template",
-	"version": "0.0.0",
-	"description": "",
+	"name": "roblox-wiki-bot",
+	"version": "0.1.0",
+	"description": "Bot designed for RSA to query Roblox's Developer Hub.",
 	"main": "index.js",
 	"scripts": {
 		"lint": "npx eslint . && npx prettier --check .",
