@@ -49,7 +49,7 @@ function setupGuild(guild: Guild): void {
 }
 
 try {
-	const { token, source } = JSON.parse(readFileSync("data.json", "utf-8")) as IData;
+	const { token, source } = JSON.parse(readFileSync("data2.json", "utf-8")) as IData;
 
 	if (token.length === 0) {
 		throw new Error("Invalid token provided. Please be sure that `token.json` contains your bot token.");
