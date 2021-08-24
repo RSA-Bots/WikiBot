@@ -42,6 +42,8 @@ interface RSAResult {
 }
 
 type RSACategory = [RSAResult];
+type EmbedTrack = { messageId: string; channelId: string };
+type EmbedList = { [index: string]: EmbedTrack };
 
 const slash_command_wiki: ApplicationCommandData = {
 	name: "wiki",
@@ -104,10 +106,43 @@ const slash_command_rsa: ApplicationCommandData = {
 	],
 };
 
+const slash_command_select: ApplicationCommandData = {
+	name: "select",
+	description: "Update your most recent embed.",
+	options: [
+		{
+			type: "SUB_COMMAND",
+			name: "result",
+			description: "Updates your most recent embed to display a result.",
+			options: [
+				{
+					type: "INTEGER",
+					name: "index",
+					description: "The index of the result to select if one has not already been selected.",
+					required: true,
+				},
+			],
+		},
+		{
+			type: "SUB_COMMAND",
+			name: "page",
+			description: "Updates your most recent embed to the page selected.",
+			options: [
+				{
+					type: "INTEGER",
+					name: "index",
+					description: "The page to jump to.",
+					required: true,
+				},
+			],
+		},
+	],
+};
+
 function setupGuild(guild: Guild): void {
 	const commands = guild.commands;
 
-	commands.set([slash_command_wiki, slash_command_rsa]).catch(console.error.bind(console));
+	commands.set([slash_command_wiki, slash_command_rsa, slash_command_select]).catch(console.error.bind(console));
 }
 
 try {
@@ -120,6 +155,8 @@ try {
 	let rsaData = "";
 
 	let sourceRSA: RSACategory;
+
+	const embedTrack: EmbedList = {};
 
 	console.log("Building rsaData started.");
 	get(data.rsaSource, res => {
@@ -271,6 +308,12 @@ try {
 									.editReply({
 										embeds: [resultEmbed],
 									})
+									.then(message => {
+										embedTrack[interaction.user.id] = {
+											messageId: message.id,
+											channelId: interaction.channelId,
+										};
+									})
 									.catch(console.error.bind(console));
 							});
 						});
@@ -361,6 +404,181 @@ try {
 								],
 							});
 						}
+					} else if (interaction.commandName === "select") {
+						const guild = interaction.guild;
+
+						if (!guild)
+							return interaction.reply({
+								ephemeral: true,
+								content: "No guild received. Please try again.",
+							});
+
+						const subCommand = interaction.options["_subcommand"];
+						const index = interaction.options["_hoistedOptions"][0].value as number;
+
+						if (!index)
+							return interaction.reply({
+								ephemeral: true,
+								content: "No index provided. Please try again.",
+							});
+
+						const messageData: EmbedTrack = embedTrack[interaction.user.id];
+
+						if (messageData.messageId.length === 0 || messageData.channelId.length === 0)
+							return interaction.reply({
+								ephemeral: true,
+								content: "No previous, or valid, embed to interact on. Please try again.",
+							});
+
+						guild.channels
+							.fetch(messageData.channelId)
+							.then(channel => {
+								if (channel && channel.isText()) {
+									channel.messages
+										.fetch(messageData.messageId)
+										.then(message => {
+											if (message && message.embeds.length > 0) {
+												if (subCommand === "result") {
+													const embed = message.embeds[0];
+
+													if (embed) {
+														const results = embed.fields[0];
+
+														if (results) {
+															const indecies: string[] = results.value.split("\n");
+
+															if (indecies.length < index) {
+																return interaction.reply({
+																	ephemeral: true,
+																	content:
+																		"Invalid index provided. Please try again.",
+																});
+															}
+
+															const result = indecies[index - 1];
+															let dataParse = result;
+															const firstSquare = dataParse.indexOf("[") + 1;
+															dataParse = dataParse.substr(firstSquare);
+															const secondSquare = dataParse.indexOf("[") + 1;
+															dataParse = dataParse.substr(
+																secondSquare,
+																dataParse.length - 1
+															);
+
+															const query = dataParse.split("](");
+															let searchQuery = query[0];
+															const propertySplit = searchQuery.indexOf(".");
+															if (propertySplit) {
+																searchQuery = searchQuery.substr(propertySplit);
+															}
+
+															console.log(query[1]);
+															const robloxResult = `${data.apiPrefix}${searchQuery}${data.apiSuffix}`;
+															let selectedResult = "";
+															let masterResult: RobloxMasterResult;
+
+															get(robloxResult, res => {
+																res.on("data", d => {
+																	selectedResult += d;
+																});
+
+																res.on("end", () => {
+																	selectedResult = selectedResult.slice(
+																		46,
+																		selectedResult.length - 1
+																	);
+																	masterResult = JSON.parse(
+																		selectedResult
+																	) as RobloxMasterResult;
+
+																	const masterRecordList: RobloxMasterResultRecord[] =
+																		[];
+
+																	Object.entries(masterResult.records).forEach(
+																		([, records]: [
+																			string,
+																			RobloxMasterResultRecord[]
+																		]) =>
+																			Object.values(records).find(record => {
+																				if (
+																					record.url === query[1] ||
+																					record.display_title === query[0]
+																				)
+																					masterRecordList.push(record);
+																			})
+																	);
+
+																	console.log(masterRecordList);
+
+																	const matchingRecord = masterRecordList[0];
+
+																	let display = matchingRecord.summary;
+																	if (!display || display.length === 0) {
+																		if (matchingRecord.body) {
+																			display = matchingRecord.body.slice(0, 100);
+																		}
+
+																		if (matchingRecord.highlight) {
+																			if (matchingRecord.highlight.body) {
+																				display =
+																					matchingRecord.highlight.body.slice(
+																						0,
+																						100
+																					);
+																			}
+																		}
+																	}
+
+																	if (display.length === 0)
+																		display = "No description found.";
+
+																	const resultEmbed: MessageEmbed =
+																		new MessageEmbed();
+
+																	resultEmbed.setTitle(matchingRecord.display_title);
+																	resultEmbed.setURL(matchingRecord.url);
+																	resultEmbed.addField("\u200b", display, false);
+
+																	message
+																		.edit({ embeds: [resultEmbed] })
+																		.catch(console.error.bind(console));
+
+																	interaction
+																		.reply({
+																			ephemeral: true,
+																			content: "Successfully selected result.",
+																		})
+																		.then(() => {
+																			embedTrack[interaction.user.id] = {
+																				messageId: "",
+																				channelId: "",
+																			};
+																		})
+																		.catch(console.error.bind(console));
+																});
+															}).on("error", console.error.bind(console));
+
+															console.log(query);
+														}
+													}
+												} else {
+													return interaction.reply({
+														ephemeral: true,
+														content: "NYI - page selection",
+													});
+												}
+											} else {
+												embedTrack[interaction.user.id] = { messageId: "", channelId: "" };
+												return interaction.reply({
+													ephemeral: true,
+													content: "Invalid messageData received. Please try again.",
+												});
+											}
+										})
+										.catch(console.error.bind(console));
+								}
+							})
+							.catch(console.error.bind(console));
 					} else {
 						await interaction.reply({
 							ephemeral: true,
