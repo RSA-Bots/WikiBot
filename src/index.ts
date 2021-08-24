@@ -4,8 +4,7 @@ import { get } from "https";
 
 interface IData {
 	token: string;
-	source: string;
-	source2: string;
+	rsaSource: string;
 	apiPrefix: string;
 	apiSuffix: string;
 }
@@ -15,25 +14,18 @@ interface IRange {
 	max: number;
 }
 
-interface RobloxResult {
-	category: string;
-	title: string;
-	url: string;
-	weight: number;
-}
-
 interface RobloxMasterResult {
 	record_count: number;
-	records: {
-		page: RobloxMasterResultRecord[];
-	};
+	records: { [index: string]: RobloxMasterResultRecord[] };
 }
 
 interface RobloxMasterResultRecord {
 	url: string;
-	title: string;
 	summary: string;
+	category: string;
+	display_title: string;
 	segment: string;
+	api_type: string;
 	body: string;
 	_score: number;
 	highlight: {
@@ -49,32 +41,7 @@ interface RSAResult {
 	author: string;
 }
 
-type RobloxCategory = { [index: string]: RobloxResult };
 type RSACategory = [RSAResult];
-
-interface DataMapping {
-	articles: RobloxCategory;
-	videos: RobloxCategory;
-	code_samples: RobloxCategory;
-	datatype: RobloxCategory;
-	recipes: RobloxCategory;
-	enum: RobloxCategory;
-	resources: RobloxCategory;
-	other: RobloxCategory;
-}
-
-const weights = {
-	articles: 2,
-	videos: 1,
-	code_samples: 1,
-	datatype: 3,
-	recipes: 1,
-	enum: 4,
-	resources: 1,
-	property: 6,
-	class: 7,
-	event: 5,
-} as { [index: string]: number };
 
 const slash_command_wiki: ApplicationCommandData = {
 	name: "wiki",
@@ -85,6 +52,11 @@ const slash_command_wiki: ApplicationCommandData = {
 			name: "query",
 			description: "The query to search for.",
 			required: true,
+		},
+		{
+			type: "INTEGER",
+			name: "page",
+			description: "The specified results page, if applicable.",
 		},
 	],
 };
@@ -145,13 +117,12 @@ try {
 		throw new Error("Invalid token provided. Please be sure that `token.json` contains your bot token.");
 	}
 
-	let jsonData = "";
 	let rsaData = "";
 
 	let sourceRSA: RSACategory;
 
 	console.log("Building rsaData started.");
-	get(data.source2, res => {
+	get(data.rsaSource, res => {
 		res.on("data", d => {
 			rsaData += d;
 		});
@@ -159,19 +130,6 @@ try {
 		res.on("end", () => {
 			console.log("Building rsaData completed.");
 			sourceRSA = JSON.parse(rsaData) as RSACategory;
-		});
-	}).on("error", console.error.bind(console));
-
-	console.log("Building sourceData started.");
-
-	get(data.source, res => {
-		res.on("data", d => {
-			jsonData += d;
-		});
-
-		res.on("end", () => {
-			console.log("Building sourceData completed.");
-			const sourceData = JSON.parse(jsonData) as DataMapping;
 
 			const client = new Client({
 				intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES, Intents.FLAGS.GUILD_MEMBERS],
@@ -198,67 +156,58 @@ try {
 						await interaction.deferReply();
 
 						const query = interaction.options["_hoistedOptions"][0].value as string;
+						let page = 1;
+
+						if (interaction.options["_hoistedOptions"][1]) {
+							page = interaction.options["_hoistedOptions"][1].value as number;
+						}
 
 						if (!query) await interaction.editReply("Invalid query received.");
 
-						let results: RobloxResult[] = [];
-						const resultEmbed: MessageEmbed = new MessageEmbed();
-						resultEmbed.setDescription(interaction.user.tag);
-
-						Object.entries(sourceData).forEach(([index, category]: [string, RobloxCategory]) =>
-							Object.values(category).find(result => {
-								if (result.title.toLowerCase() === query.toLowerCase()) {
-									results.push({
-										category: index,
-										title: result.title,
-										url: result.url,
-										weight: weights[index],
-									});
-								}
-							})
-						);
-
-						if (results.length === 0) {
-							Object.entries(sourceData).forEach(([index, category]: [string, RobloxCategory]) =>
-								Object.values(category).find(result => {
-									if (result.title.toLowerCase().includes(query.toLowerCase())) {
-										results.push({
-											category: index,
-											title: result.title,
-											url: result.url,
-											weight: weights[index],
-										});
-									}
-								})
-							);
+						let searchQuery = query;
+						while (searchQuery.includes(".")) {
+							searchQuery = searchQuery.replace(".", "");
 						}
 
-						results = results.sort((a, b) => (a.weight > b.weight ? 1 : -1));
+						const resultEmbed: MessageEmbed = new MessageEmbed();
+						const robloxResult = `${data.apiPrefix}${searchQuery}${data.apiSuffix}`;
+						let fetchedData = "";
+						let masterResult: RobloxMasterResult;
 
-						if (results.length === 1) {
-							const robloxResult = `${data.apiPrefix}${results[0].title}${data.apiSuffix}`;
-							let fetchedData = "";
-							let masterResult: RobloxMasterResult;
+						get(robloxResult, res => {
+							res.on("data", d => {
+								fetchedData += d;
+							});
 
-							get(robloxResult, res => {
-								res.on("data", d => {
-									fetchedData += d;
-								});
+							res.on("end", () => {
+								fetchedData = fetchedData.slice(46, fetchedData.length - 1);
+								masterResult = JSON.parse(fetchedData) as RobloxMasterResult;
 
-								res.on("end", () => {
-									fetchedData = fetchedData.slice(45, fetchedData.length - 1);
-									masterResult = JSON.parse(fetchedData) as RobloxMasterResult;
+								let masterRecordList: RobloxMasterResultRecord[] = [];
 
-									const matchingRecord = Object.values(masterResult.records.page).find(result => {
-										if (result.url === `https://developer.roblox.com/en-us${results[0].url}`) {
-											return result;
+								Object.entries(masterResult.records).forEach(
+									([, records]: [string, RobloxMasterResultRecord[]]) =>
+										Object.values(records).find(record => {
+											if (record.url.includes("en-us") && record.display_title.length > 0)
+												masterRecordList.push(record);
+										})
+								);
+
+								masterRecordList = masterRecordList.sort((a, b) => (a._score < b._score ? 1 : -1));
+
+								if (masterRecordList.length > 0) {
+									const matchingRecord = masterRecordList.find(record => {
+										if (record.display_title) {
+											return record.display_title.toLowerCase() === query.toLowerCase();
 										}
 									});
 
 									if (matchingRecord) {
 										let display = matchingRecord.summary;
 										if (!display || display.length === 0) {
-											display = matchingRecord.body.slice(0, 100);
+											if (matchingRecord.body) {
+												display = matchingRecord.body.slice(0, 100);
+											}
 
 											if (matchingRecord.highlight) {
 												if (matchingRecord.highlight.body) {
@@ -267,62 +216,64 @@ try {
 											}
 										}
 
-										resultEmbed.setTitle(results[0].title);
-										resultEmbed.setURL(`https://developer.roblox.com/en-us${results[0].url}`);
+										if (display.length === 0) display = "No description found.";
+
+										resultEmbed.setTitle(matchingRecord.display_title);
+										resultEmbed.setURL(matchingRecord.url);
 										resultEmbed.addField("\u200b", display, false);
 									} else {
-										resultEmbed.setTitle(results[0].title);
-										resultEmbed.setURL(`https://developer.roblox.com/en-us${results[0].url}`);
-										resultEmbed.addField("\u200b", "No description found.", false);
+										if (page > Math.floor(masterRecordList.length / 5)) {
+											page = Math.floor(masterRecordList.length / 5);
+
+											if (
+												Math.floor(masterRecordList.length / 5) !=
+												Math.ceil(masterRecordList.length / 5)
+											) {
+												page += 1;
+											}
+										}
+
+										console.log(page);
+
+										const range: IRange = { min: (page - 1) * 5, max: page * 5 };
+
+										console.log(range);
+
+										resultEmbed.setTitle(`Results for: ${query}`);
+										resultEmbed.addField(
+											"\u200b",
+											masterRecordList
+												.slice(range.min, range.max)
+												.map(record => {
+													return `[${
+														record.category.length > 0
+															? record.category
+															: record.api_type.length > 0
+															? record.api_type
+															: "Articles"
+													}] [${record.display_title}](${record.url})`;
+												})
+												.join("\n"),
+											true
+										);
+										resultEmbed.setFooter(
+											`Total Results: ${masterRecordList.length} | Showing Results: ${
+												range.min + 1
+											} - ${Math.min(range.max, masterRecordList.length)}\nPage: ${page}`
+										);
 									}
+								} else {
+									resultEmbed.setTitle("Sad days...");
+									resultEmbed.addField("\u200b", "Zero Results Found", false);
+								}
 
-									interaction
-										.editReply({
-											embeds: [resultEmbed],
-										})
-										.catch(console.error.bind(console));
-								});
-							});
-						} else if (results.length > 1) {
-							resultEmbed.setTitle(`Results for ${query}`);
-							resultEmbed.addField(
-								"\u200b",
-								results
-									.slice(0, Math.min(results.length, 5))
-									.map(result => {
-										let display = result.category;
-										if (display === "other") display = result.url;
-
-										if (display.includes("/api-reference/")) {
-											display = display.slice(15).slice(0, display.slice(15).indexOf("/"));
-										}
-
-										if (display.includes("onboarding")) {
-											display = "Onboarding";
-											let adjustedTitle = result.title
-												.slice(12)
-												.slice(0, result.title.slice(12).indexOf("/"));
-
-											adjustedTitle =
-												adjustedTitle.slice(0, 1).toUpperCase() + adjustedTitle.slice(1);
-
-											result.title = adjustedTitle;
-										}
-
-										display = display.slice(0, 1).toUpperCase() + display.slice(1);
-
-										return `[${display}] [${result.title}](https://developer.roblox.com/en-us${result.url})`;
+								interaction
+									.editReply({
+										embeds: [resultEmbed],
 									})
-									.join("\n"),
-								true
-							);
-
-							await interaction.editReply({
-								embeds: [resultEmbed],
+									.catch(console.error.bind(console));
 							});
-						} else {
-							await interaction.editReply("Zero results found.");
-						}
+						});
 					} else if (interaction.commandName === "rsa_article") {
 						const subCommand = interaction.options["_subcommand"];
 						const query = String(interaction.options["_hoistedOptions"][0].value);
@@ -358,7 +309,13 @@ try {
 							}
 						});
 
-						if (page > Math.floor(result.length / 5)) page = Math.floor(result.length / 5);
+						if (page > Math.floor(result.length / 5)) {
+							page = Math.floor(result.length / 5);
+
+							if (Math.floor(result.length / 5) != Math.ceil(result.length / 5)) {
+								page += 1;
+							}
+						}
 
 						range.min = (page - 1) * 5;
 						range.max = page * 5;
@@ -398,8 +355,8 @@ try {
 										)
 										.setFooter(
 											`Total Results: ${result.length} | Showing Results: ${
-												range.min === 0 ? 1 : range.min
-											} - ${range.max}`
+												range.min + 1
+											} - ${Math.min(range.max, result.length)}\nPage: ${page}`
 										),
 								],
 							});
