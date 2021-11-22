@@ -375,7 +375,7 @@ try {
 										.setTitle(result[0].title)
 										.setDescription(result[0].author)
 										.addField("\u200b", result[0].excerpt, true)
-										.setURL(`https://robloxscriptassistance.org${result[0].url}`),
+										.setURL(`https://resources.robloxscriptassistance.org${result[0].url}`),
 								],
 							});
 						} else {
@@ -391,7 +391,7 @@ try {
 											result
 												.slice(range.min, range.max)
 												.map(res => {
-													return `[${res.title}](https://robloxscriptassistance.org${res.url}) - ${res.author}`;
+													return `[${res.title}](https://resources.robloxscriptassistance.org${res.url}) - ${res.author}`;
 												})
 												.join("\n"),
 											true
